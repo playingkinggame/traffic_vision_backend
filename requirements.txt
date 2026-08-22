@@ -6,3 +6,4 @@ opencv-python-headless==4.10.0.84
 numpy==1.26.4
 pillow==10.4.0
 pyyaml==6.0.2
+lap==0.5.12

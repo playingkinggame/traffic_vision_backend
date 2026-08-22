@@ -12,7 +12,8 @@ from ultralytics import YOLO
 
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "best.pt"
 
-# BGR (OpenCV order) - teal / purple / pink / amber, one per class fallback
+# BGR (OpenCV order) - teal / purple / pink / amber, one per class fallback.
+# Shared with tracker.py so live-tracking boxes use the same palette.
 CLASS_COLORS = [
     (212, 175, 55),   # amber-ish
     (200, 120, 255),  # pink

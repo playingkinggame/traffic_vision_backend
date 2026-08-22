@@ -119,13 +119,20 @@ async def track_upload(file: UploadFile = File(...)):
 
 
 @app.get("/api/track/stream/{job_id}")
-def track_stream(job_id: str, conf: float = 0.4, mpp: float = 0.05):
+def track_stream(
+    job_id: str,
+    conf: float = 0.4,
+    mpp: float = 0.05,
+    imgsz: int = 960,
+    iou: float = 0.5,
+    smoothing: float = 0.6,
+):
     in_path = JOBS.get(job_id)
     if in_path is None or not in_path.exists():
         raise HTTPException(404, "Unknown or expired job_id. Upload the video again.")
 
     return StreamingResponse(
-        mjpeg_track_stream(str(in_path), job_id, conf=conf, mpp=mpp),
+        mjpeg_track_stream(str(in_path), job_id, conf=conf, mpp=mpp, imgsz=imgsz, iou=iou, smoothing=smoothing),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 

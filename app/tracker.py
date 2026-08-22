@@ -29,9 +29,27 @@ def _color_for(cls_id: int):
     return CLASS_COLORS[cls_id % len(CLASS_COLORS)]
 
 
-def mjpeg_track_stream(video_path: str, job_id: str, conf: float = 0.4, mpp: float = 0.05):
+def mjpeg_track_stream(
+    video_path: str,
+    job_id: str,
+    conf: float = 0.4,
+    mpp: float = 0.05,
+    imgsz: int = 960,
+    iou: float = 0.5,
+    smoothing: float = 0.6,
+):
     """Generator yielding multipart JPEG chunks - point an <img> tag's src
     at the endpoint using this, and the browser renders it as a live feed.
+
+    imgsz: match this to whatever you trained with (960 by default here) -
+    running inference at a lower size than training throws away the exact
+    detail that helps with small/distant vehicles.
+    iou: lower value merges overlapping duplicate boxes on the same vehicle
+    more aggressively - raise it if legitimately close vehicles get merged
+    into one box, lower it if the same vehicle gets double-boxed.
+    smoothing: 0 = no smoothing (raw box every frame, can jitter),
+    closer to 1 = boxes barely move frame-to-frame (very stable but laggy
+    on fast-moving vehicles). 0.6 is a reasonable middle ground.
     """
     if not detector.is_ready:
         raise RuntimeError("Model weights not found. Train the model first.")
@@ -42,6 +60,7 @@ def mjpeg_track_stream(video_path: str, job_id: str, conf: float = 0.4, mpp: flo
 
     # track_id -> deque of (frame_idx, cx, cy), just enough history for speed calc
     track_history: dict[int, deque] = defaultdict(lambda: deque(maxlen=5))
+    smoothed_boxes: dict[int, tuple] = {}  # track_id -> last smoothed (x1,y1,x2,y2)
     seen_ids: dict[str, set] = defaultdict(set)  # class label -> set of track ids ever seen
     frame_idx = 0
 
@@ -60,7 +79,13 @@ def mjpeg_track_stream(video_path: str, job_id: str, conf: float = 0.4, mpp: flo
             break
 
         results = detector.model.track(
-            frame, persist=True, tracker="bytetrack.yaml", conf=conf, verbose=False
+            frame,
+            persist=True,
+            tracker="bytetrack.yaml",
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            verbose=False,
         )[0]
 
         annotated = frame.copy()
@@ -72,7 +97,22 @@ def mjpeg_track_stream(video_path: str, job_id: str, conf: float = 0.4, mpp: flo
             xyxy = results.boxes.xyxy.cpu().tolist()
 
             for box, track_id, cls_id in zip(xyxy, ids, cls_ids):
-                x1, y1, x2, y2 = map(int, box)
+                raw_x1, raw_y1, raw_x2, raw_y2 = box
+
+                # Exponential smoothing per track ID - blends this frame's
+                # box with the previous smoothed box, so the box glides
+                # instead of jumping around on small per-frame model noise.
+                if track_id in smoothed_boxes:
+                    px1, py1, px2, py2 = smoothed_boxes[track_id]
+                    x1 = smoothing * px1 + (1 - smoothing) * raw_x1
+                    y1 = smoothing * py1 + (1 - smoothing) * raw_y1
+                    x2 = smoothing * px2 + (1 - smoothing) * raw_x2
+                    y2 = smoothing * py2 + (1 - smoothing) * raw_y2
+                else:
+                    x1, y1, x2, y2 = raw_x1, raw_y1, raw_x2, raw_y2
+                smoothed_boxes[track_id] = (x1, y1, x2, y2)
+
+                x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
                 cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                 label = detector.class_names.get(cls_id, str(cls_id))
                 seen_ids[label].add(track_id)
@@ -103,6 +143,13 @@ def mjpeg_track_stream(video_path: str, job_id: str, conf: float = 0.4, mpp: flo
                     annotated, tag, (x1 + 3, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (10, 10, 10), 1, cv2.LINE_AA,
                 )
+
+            # drop smoothing state for tracks that vanished this frame,
+            # otherwise memory grows unbounded on long videos
+            active_ids = set(ids)
+            for stale_id in list(smoothed_boxes.keys()):
+                if stale_id not in active_ids:
+                    smoothed_boxes.pop(stale_id, None)
 
         STATS_STORE[job_id] = {
             "unique_counts": {k: len(v) for k, v in seen_ids.items()},

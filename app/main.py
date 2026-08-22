@@ -36,7 +36,7 @@ def health():
 
 
 @app.post("/api/predict/image")
-async def predict_image(file: UploadFile = File(...), conf: float = 0.25):
+async def predict_image(file: UploadFile = File(...), conf: float = 0.4):
     if not detector.is_ready:
         raise HTTPException(503, "Model not trained yet. Run train.py and place best.pt in app/weights/.")
 
